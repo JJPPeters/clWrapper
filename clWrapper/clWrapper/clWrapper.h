@@ -1,11 +1,9 @@
 // All Includes for functioning of clWrapper
 
-#include <string>
-#include <vector>
-#include <memory>
-#include <stdlib.h>
-#include <math.h>
-#include "CL/opencl.h"
+#define CL_HPP_MINIMUM_OPENCL_VERSION 100
+#define CL_HPP_TARGET_OPENCL_VERSION 100
+
+#include "CL/cl.hpp"
 #include "Auto.h"
 #include "Manual.h"
 #include "clContext.h"
@@ -17,6 +15,4 @@
 #include "clMemory.h"
 #include "Notify.h"
 #include "clEvent.h"
-#include "Misc.h"
-#include "boost/shared_ptr.hpp"
 

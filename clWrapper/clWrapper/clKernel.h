@@ -1,12 +1,15 @@
 #ifndef CL_KERNEL_H
 #define CL_KERNEL_H
 
-#include "clMemory.h"
-#include "clEvent.h"
-#include "Cl/Opencl.h"
-#include "clWorkgroup.h"
 #include <algorithm>
 #include <utility>
+
+#include "CL/cl.hpp"
+
+#include "Utilities.h"
+#include "clMemory.h"
+#include "clEvent.h"
+#include "clWorkgroup.h"
 
 // Optionally passed to argument setting.
 // Output types will be updated automatically when data is modified
@@ -27,106 +30,67 @@ namespace ArgumentType
 
 class clKernel
 {
+private:
+	clContext Context;
+	cl::Program Program;
+	cl::Kernel Kernel;
+	std::string Name;
+
+	unsigned int NumberOfArgs;
+	std::vector<ArgumentType::ArgTypes> ArgType;
+	std::vector<Notify*> Callbacks;
+
+	void RunCallbacks(clEvent KernelFinished);
+
 public:
-	class BuildException: public std::runtime_error
+	clKernel() {}
+
+	clKernel(clContext _context, const std::string &codestring, std::string _name, unsigned int _numArgs)
+		: Context(_context), Name(_name), NumberOfArgs(_numArgs)
 	{
-	public:
-		BuildException(std::string message, cl_int status): runtime_error(message), Status(status){};
-		cl_int Status;
-	};
-
-	clKernel(){ NotDefault = false; }
-	~clKernel(){ if(NotDefault) { clReleaseProgram(Program); clReleaseKernel(Kernel); } }
-
-	clKernel(clContext &_context, const char* codestring, int _NumberOfArgs, std::string _name)
-		: Context(&_context), NumberOfArgs(_NumberOfArgs), Name(_name)
-	{
-		NotDefault = true;
-		ArgType.resize(_NumberOfArgs);
-		Callbacks.resize(_NumberOfArgs);
-		BuildKernelFromString(codestring,_name,NumberOfArgs);
-		CodeString = codestring;
-	}
-
-	// Can enter arguments as literals now...
-	template <class T> void SetArg(int position, const T arg, ArgumentType::ArgTypes ArgumentType = ArgumentType::Unspecified)
-	{
-		ArgType[position] = ArgumentType;
-		status |= clSetKernelArg(Kernel,position,sizeof(T),&arg);
-	}
-
-	clKernel& operator=(clKernel& Copy){
-		if(this!=&Copy)
-		{
-			Context = Copy.Context;
-			NumberOfArgs = Copy.NumberOfArgs;
-			Name = Copy.Name;
-			CodeString = Copy.CodeString;
-			NotDefault = Copy.NotDefault;
-			ArgType.clear();
-			ArgType.resize(NumberOfArgs);
-			Callbacks.clear();
-			Callbacks.resize(NumberOfArgs);
-			BuildKernelFromString(CodeString,Name,NumberOfArgs);
-		}
-		return *this;
-	}
-
-	clKernel(const clKernel& Copy): Context(Copy.Context), NumberOfArgs(Copy.NumberOfArgs), Name(Copy.Name), CodeString(Copy.CodeString)
-	{
-		NotDefault = Copy.NotDefault;
-		ArgType.clear();
 		ArgType.resize(NumberOfArgs);
-		Callbacks.clear();
 		Callbacks.resize(NumberOfArgs);
-		BuildKernelFromString(CodeString,Name,NumberOfArgs);
+
+		std::string options = "-cl-finite-math-only -cl-unsafe-math-optimizations -cl-no-signed-zeros";// -Werror";
+
+		cl_int status;
+		Program = cl::Program(Context.GetContext(), codestring, false, &status);
+		status = Program.build(options.c_str()); // could just put true above - need to remember to pass it the string
+
+
+		std::string buildlog_str = Program.getBuildInfo<CL_PROGRAM_BUILD_LOG>(Context.GetContextDevice().getDevice(), &status);
+		clError::Throw(status, Name + "\nBuild log:\n" + buildlog_str);
+
+		Kernel = cl::Kernel(Program, Name.c_str(), &status);
+		clError::Throw(status, Name + "\nBuild log:\n" + buildlog_str);
+	}
+
+	template <class T, template <class> class AutoPolicy>
+	void SetArg(cl_uint index, clMemory<T, AutoPolicy>& arg, ArgumentType::ArgTypes ArgumentType = ArgumentType::Unspecified) {
+		ArgType[index] = ArgumentType;
+		Callbacks[index] = &arg;
+
+		cl_int status = Kernel.setArg(index, arg.GetBuffer());
+		clError::Throw(status, Name + " arg " + toString(index));
 	}
 
 	// Overload for OpenCL Memory Buffers
-	template <class T, template <class> class AutoPolicy> void SetArg(int position, boost::shared_ptr<clMemory<T,AutoPolicy>>& arg, ArgumentType::ArgTypes ArgumentType = Unspecified)
-	{
-		ArgType[position] = ArgumentType;
-		Callbacks[position] = arg.get();
-		status |= clSetKernelArg(Kernel,position,sizeof(cl_mem),&arg->GetBuffer());
+	template <class T>
+	void SetArg(cl_uint index, const T arg, ArgumentType::ArgTypes ArgumentType = ArgumentType::Unspecified) {
+		ArgType[index] = ArgumentType;
+
+		cl_int status = Kernel.setArg(index, arg);
+		clError::Throw(status, Name + " arg " + toString(index));
 	}
 
-	template <class T> void SetLocalMemoryArg(int position, int size) 
-	{
-		status |= clSetKernelArg(Kernel,position,size*sizeof(T),NULL);
+	template <class T>
+	void SetLocalMemoryArg(cl_uint index, unsigned int size) {
+		cl_int status = Kernel.setArg(index, size * sizeof(T), NULL);
+		clError::Throw(status, Name + " arg " + toString(index));
 	}
 
-	clEvent operator()(clWorkGroup Global);
-	clEvent operator()(clWorkGroup Global, clEvent StartEvent);
-	clEvent operator()(clWorkGroup Global, clWorkGroup Local);
-	clEvent operator()(clWorkGroup Global, clWorkGroup Local, clEvent StartEvent);
-	
-	cl_int GetStatus(){ return status; };
-	int NumberOfArgs;
-
-private:
-	bool NotDefault;
-	cl_int status;
-	std::vector<ArgumentType::ArgTypes> ArgType;
-	std::vector<Notify*> Callbacks;
-	clContext* Context;
-	cl_program Program;
-	cl_kernel Kernel;
-	std::string Name;
-	const char* CodeString;
-	
-	void swap(clKernel& first, clKernel& second)
-	{
-		std::swap(first.NotDefault,second.NotDefault);
-		std::swap(first.Program,second.Program);
-		std::swap(first.Kernel,second.Kernel);
-		std::swap(first.Context,second.Context);
-		std::swap(first.ArgType,second.ArgType);
-		std::swap(first.Callbacks,second.Callbacks);
-		std::swap(first.Name,second.Name);
-	}
-
-	void RunCallbacks(clEvent KernelFinished);
-	void BuildKernelFromString(const char* codestring, std::string kernelname, int NumberOfArgs);
+	clEvent Do(clWorkGroup Global);
+	clEvent Do(clWorkGroup Global, clWorkGroup Local);
 };
 
 #endif

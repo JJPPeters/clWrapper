@@ -2,81 +2,85 @@
 #define CL_CONTEXT_H
 
 #include <list>
-#include "clDevice.h"
-#include "CL/Opencl.h"
+
+#include "CL/cl.hpp"
 #include "boost/shared_ptr.hpp"
+
+#include "clerror.h"
+#include "clDevice.h"
 
 template <class T, template <class> class AutoPolicy> class clMemory;
 
-enum MemoryFlags
-{
+enum MemoryFlags {
 	ReadWrite = CL_MEM_READ_WRITE,
 	ReadOnly = CL_MEM_READ_ONLY,
 	WriteOnly = CL_MEM_WRITE_ONLY
 };
 
-class MemoryRecord
-{
+class MemoryRecord {
 public:
 	MemoryRecord(size_t _size): size(_size){};
 	size_t size;
 };
 
-class clContext
-{
-
+class clContext {
 private:
-	cl_int Status;
-	cl_context Context;
-	cl_command_queue Queue;
-	cl_command_queue IOQueue;
+	cl::Context Context;
+	cl::CommandQueue Queue;
+	cl::CommandQueue IOQueue;
 	clDevice ContextDevice;
-	std::list<MemoryRecord*> MemList;
+
+	std::vector<boost::shared_ptr<MemoryRecord>> MemList;
 
 public:
-	clContext(clDevice _ContextDevice, cl_context _Context, cl_command_queue _Queue, cl_int _Status)
-		: ContextDevice(_ContextDevice), Context(_Context), Queue(_Queue), IOQueue(_Queue), Status(_Status){};
-	clContext(clDevice _ContextDevice, cl_context _Context, cl_command_queue _Queue, cl_command_queue _IOQueue, cl_int _Status)
-		: ContextDevice(_ContextDevice), Context(_Context), Queue(_Queue), IOQueue(_IOQueue), Status(_Status){};
+	clContext() {}
 
-	void WaitForQueueFinish(){clFinish(Queue);};
-	void QueueFlush(){clFlush(Queue);};
+	clContext(cl::Context _context, cl::CommandQueue _queue, clDevice _device)
+		: Context(_context), Queue(_queue), IOQueue(_queue), ContextDevice(_device) {}
+	clContext(cl::Context _context, cl::CommandQueue _queue, cl::CommandQueue _ioqueue, clDevice _device)
+		: Context(_context), Queue(_queue), IOQueue(_ioqueue), ContextDevice(_device) {}
 
-	clDevice GetContextDevice(){return ContextDevice;};
-	cl_context& GetContext(){return Context;};
-	cl_int GetStatus(){return Status;};
-	cl_command_queue& GetQueue(){ return Queue; };
-	virtual cl_command_queue& GetIOQueue(){return IOQueue;};
+	~clContext() {};
 
-	size_t GetOccupiedMemorySize()
-	{
-		std::list<MemoryRecord*>::iterator it; size_t total = 0;
-		for(it = MemList.begin(); it != MemList.end(); it++)
-		{
-			total += (*it)->size;
-		}
+	void WaitForQueueFinish() {
+		int status = Queue.finish();
+		clError::Throw(status);
+	}
+	void WaitForIOQueueFinish() {
+		int status = IOQueue.finish();
+		clError::Throw(status);
+	}
+	void QueueFlush() {
+		int status = Queue.flush();
+		clError::Throw(status);
+	}
+	void IOQueueFlush() {
+		int status = IOQueue.flush();
+		clError::Throw(status);
+	}
+
+	clDevice& GetContextDevice() { return ContextDevice; }
+	cl::Context& GetContext() { return Context; }
+	cl::CommandQueue& GetQueue() { return Queue; }
+	cl::CommandQueue& GetIOQueue() { return IOQueue; }
+
+	size_t GetOccupiedMemorySize() {
+		size_t total = 0;
+		for (int i = 0; i < MemList.size(); ++i)
+			total += MemList[i]->size;
 		return total;
 	}
 
-	void RemoveMemRecord(MemoryRecord* rec)
-	{
-		MemList.remove(rec);
+	void AddMemRecord(const boost::shared_ptr<MemoryRecord> &rec) {
+		std::vector<boost::shared_ptr<MemoryRecord>>::iterator it = std::find(MemList.begin(), MemList.end(), rec);
+		if (it == MemList.end())
+			MemList.push_back(rec);
 	}
 
-	template<class T,template <class> class AutoPolicy> boost::shared_ptr<clMemory<T,AutoPolicy>> CreateBuffer(size_t size)
-	{
-		MemoryRecord* rec = new MemoryRecord(size*sizeof(T));
-		boost::shared_ptr<clMemory<T,AutoPolicy>> Mem( new clMemory<T,AutoPolicy>(this,size,clCreateBuffer(Context, MemoryFlags::ReadWrite, size*sizeof(T), 0, &Status),rec));
-		MemList.push_back(rec);
-		return Mem;
-	};
-
-	template<class T,template <class> class AutoPolicy > boost::shared_ptr<clMemory<T,AutoPolicy>> CreateBuffer(size_t size, enum MemoryFlags flags)
-	{
-		MemoryRecord* rec = new MemoryRecord(size*sizeof(T));
-		boost::shared_ptr<clMemory<T,AutoPolicy>> Mem( new clMemory<T,AutoPolicy>(this,size,clCreateBuffer(Context, flags, size*sizeof(T), 0, &Status),rec));
-		MemList.push_back(rec);
-		return Mem;
-	};
+	void RemoveMemRecord(const boost::shared_ptr<MemoryRecord> &rec) {
+		std::vector<boost::shared_ptr<MemoryRecord>>::iterator it = std::find(MemList.begin(), MemList.end(), rec);
+		if (it != MemList.end())
+			MemList.erase(it);
+	}
 };
 #endif

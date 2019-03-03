@@ -3,7 +3,7 @@
 
 #include "clEvent.h"
 
-class Notify abstract
+class Notify
 {
 public:
 	virtual void Update(clEvent KernelFinished)=0;
